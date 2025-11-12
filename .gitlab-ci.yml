@@ -1,0 +1,55 @@
+stages:
+  - sonar
+  - analysis
+  - deploy
+
+variables:
+  SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
+  GIT_DEPTH: "0"
+  HOME_DIR: "/home/beone"
+  MAVEN_OPTS: "-Dmaven.repo.local=${HOME_DIR}/.m2/repository"
+
+sonarqube-code-analysis:
+  stage: sonar
+  image: maven:3.6.3-jdk-11
+  script:
+    - mvn -B org.owasp:dependency-check-maven:aggregate -DnvdApiKey=${NVD_TOKEN} -DfailBuildOnCVSS=11 -Dformats=XML,JSON,HTML
+    - mvn --settings ${HOME_DIR}/.m2/settings.xml verify sonar:sonar -Dsonar.projectKey=${SONAR_PROJECT_NAME} -Dsonar.login=${SONAR_AUTH_TOKEN} -Dsonar.host.url=${SONAR_HOST_URL} -DskipTests -q -Dsonar.dependencyCheck.summarize=true -Dsonar.dependencyCheck.jsonReportPath=target/dependency-check-report.json -Dsonar.dependencyCheck.xmlReportPath=target/dependency-check-report.xml -Dsonar.dependencyCheck.htmlReportPath=target/dependency-check-report.html -Dsonar.log.level=INFO
+  artifacts:
+    paths:
+      - target/dependency-check-report.html
+  allow_failure: true
+
+sonar_to_gitlab_analysis:
+  stage: analysis
+  script:
+    - echo "Instalacja wymaganych bibliotek..."
+    - python3 -m venv env
+    - source ./env/bin/activate
+    - python -m pip install python-gitlab
+    - export PATH="$HOME/.local/bin:$PATH"
+    - echo "Uruchamianie skryptu SonarQube -> GitLab..."
+    - python .cicd/sonar_to_gitlab.py -N "$SONAR_PROJECT_NAME" -I "$CI_PROJECT_ID" -B "$CI_COMMIT_REF_NAME" -T "$GITLAB_TOKEN" -D "2020-06-15T01:03:49+0000" -F "$SONAR_HOST_URL" -A "$SONAR_USER_TOKEN"
+
+deploy_to_nexus:
+  stage: deploy
+  before_script:
+    - eval $(ssh-agent -s)
+    - echo "$GITLAB_CICD_USER_SSH_PRIVATE_KEY" | ssh-add -
+    - git config --global user.email "$GITLAB_CICD_USER_EMAIL"
+    - git config --global user.name "$GITLAB_CICD_USER_USERNAME"
+    - git checkout ${CI_COMMIT_BRANCH}
+    - git_repo_ssh_url=$(echo "${CI_REPOSITORY_URL}" | sed -e 's|https\?://gitlab-ci-token:.*@|ssh://git@|g' | sed -e "s/\(@[a-zA-Z.]*\)/\1:8701/g")
+    - git remote set-url origin "${git_repo_ssh_url}"
+    - git pull --no-edit --rebase=false origin ${CI_COMMIT_BRANCH}
+
+  script:
+    - export CURRENT_VERSION=$(mvn help:evaluate -Dexpression=revision -q -DforceStdout)
+    - export NEW_VERSION=$(echo $CURRENT_VERSION | awk -F. -v OFS=. '{$NF+=1; print}')
+    - mvn versions:set-property -Dproperty=revision -DnewVersion=${NEW_VERSION}
+    - git add pom.xml
+    - git commit -m "[release] [skip ci] Version bump to ${NEW_VERSION}"
+    - git push origin ${CI_COMMIT_BRANCH}
+    - mvn clean deploy -DskipTests
+  only:
+    - main

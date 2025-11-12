@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="pl.beone.operaton.operaton_history.dao.TaskHistoryDao">
+    <select id="getFullNameByUsername" parameterType="String" resultType="map" >
+        SELECT
+        cm_firstname as "firstname",
+        cm_lastname as "lastname"
+        FROM denormalization.cm_person
+        where cm_username = #{username}
+    </select>
+</mapper>
